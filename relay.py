@@ -174,75 +174,211 @@ class RelayHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]  # strip query string
 
         if path == "/":
-            self._serve_landing()
+            self._serve_dashboard()
         elif path == "/info":
             self._serve_info()
         elif path == "/manifest":
             self._serve_manifest()
         elif path == "/peer-limits":
             self._serve_peer_limits()
+        elif path == "/status":
+            self._serve_status()
         elif path.startswith("/file/"):
             self._serve_file(path[6:])  # strip "/file/"
         else:
             self._send_text(404, f"Not found: {path}")
 
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path == "/fetch":
+            self._handle_fetch()
+        else:
+            self._send_text(404, f"Not found: {path}")
+
     # -- Endpoints --
 
-    def _serve_landing(self):
-        cfg = self.server.relay_config
-        bitcoin_dir = get_bitcoin_dir(cfg)
-        height = get_chain_height(bitcoin_dir)
-        filters = has_block_filters(bitcoin_dir)
-        version = cfg.get("relay", {}).get("version", __version__)
-
-        filters_html = '<div class="filters">&#x26A1; Lightning block filters included</div>' if filters else ""
-
-        html = f"""<!DOCTYPE html>
+    def _serve_dashboard(self):
+        html = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pocket Node Relay</title>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #121212; color: #e0e0e0;
-    display: flex; justify-content: center; align-items: center;
-    min-height: 100vh; padding: 24px;
-  }}
-  .card {{
-    background: #1e1e1e; border-radius: 16px; padding: 32px;
-    max-width: 400px; width: 100%; text-align: center;
-  }}
-  h1 {{ font-size: 24px; color: #fff; margin-bottom: 4px; }}
-  .subtitle {{ color: #999; font-size: 14px; margin-bottom: 24px; }}
-  .stats {{
-    background: #2a2a2a; border-radius: 12px; padding: 16px;
-    margin-bottom: 24px; text-align: left;
-  }}
-  .stat {{ display: flex; justify-content: space-between; padding: 6px 0; }}
-  .stat-label {{ color: #999; }}
-  .stat-value {{ color: #fff; font-weight: 600; font-family: monospace; }}
-  .filters {{ color: #4CAF50; font-size: 13px; margin-top: 4px; }}
-  .note {{ color: #666; font-size: 12px; margin-top: 16px; line-height: 1.5; }}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#121212;color:#e0e0e0;min-height:100vh;padding:24px;display:flex;justify-content:center}
+  .container{max-width:600px;width:100%}
+  h1{font-size:28px;color:#fff;text-align:center;margin-bottom:4px}
+  .subtitle{color:#999;font-size:14px;text-align:center;margin-bottom:24px}
+  .card{background:#1e1e1e;border-radius:16px;padding:24px;margin-bottom:16px}
+  .card h2{font-size:16px;color:#FF9800;margin-bottom:16px}
+  .stat{display:flex;justify-content:space-between;padding:6px 0}
+  .stat-label{color:#999}
+  .stat-value{color:#fff;font-weight:600;font-family:monospace}
+  .filters{color:#4CAF50;font-size:13px;margin-top:4px}
+  .qr-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+  .qr-box{background:#fff;border-radius:12px;padding:16px;text-align:center}
+  .qr-box canvas{display:block;margin:0 auto 8px}
+  .qr-label{font-size:12px;color:#333;font-weight:600}
+  .qr-addr{font-size:10px;color:#666;word-break:break-all;max-width:200px;margin-top:4px}
+  .btn{display:block;width:100%;padding:14px;border-radius:12px;font-size:16px;font-weight:600;border:none;cursor:pointer;margin-top:12px}
+  .btn-primary{background:#FF9800;color:#000}
+  .btn-primary:hover{background:#FFA726}
+  .btn-primary:disabled{background:#555;color:#888;cursor:not-allowed}
+  input[type=text]{width:100%;padding:12px;border-radius:8px;border:1px solid #444;background:#2a2a2a;color:#fff;font-size:14px;margin-top:8px}
+  input[type=text]:focus{outline:none;border-color:#FF9800}
+  .progress-bar{width:100%;height:8px;background:#2a2a2a;border-radius:4px;margin-top:12px;overflow:hidden}
+  .progress-fill{height:100%;background:#FF9800;border-radius:4px;transition:width 0.3s}
+  .status-text{font-size:13px;color:#999;margin-top:8px;text-align:center}
+  .error{color:#f44336}
+  .success{color:#4CAF50}
+  .hidden{display:none}
 </style>
 </head>
 <body>
-<div class="card">
+<div class="container">
   <h1>&#x20BF; Pocket Node Relay</h1>
-  <div class="subtitle">A relay server is sharing validated Bitcoin chainstate</div>
-  <div class="stats">
-    <div class="stat"><span class="stat-label">Block height</span><span class="stat-value">{height:,}</span></div>
-    <div class="stat"><span class="stat-label">Relay version</span><span class="stat-value">{version}</span></div>
-    <div class="stat"><span class="stat-label">Type</span><span class="stat-value">Headless relay</span></div>
-    {filters_html}
+  <div class="subtitle">Chainstate relay server for Bitcoin Pocket Node</div>
+
+  <!-- Status Card -->
+  <div class="card">
+    <h2>&#x1F4E1; Relay Status</h2>
+    <div id="stats">
+      <div class="stat"><span class="stat-label">Chain height</span><span class="stat-value" id="height">loading...</span></div>
+      <div class="stat"><span class="stat-label">Block filters</span><span class="stat-value" id="filters">...</span></div>
+      <div class="stat"><span class="stat-label">Files</span><span class="stat-value" id="filecount">...</span></div>
+      <div class="stat"><span class="stat-label">Total size</span><span class="stat-value" id="totalsize">...</span></div>
+      <div class="stat"><span class="stat-label">Active transfers</span><span class="stat-value" id="transfers">...</span></div>
+      <div class="stat"><span class="stat-label">Last updated</span><span class="stat-value" id="updated">...</span></div>
+    </div>
   </div>
-  <div class="note">
-    Open Pocket Node on your phone and choose "Copy from nearby phone" during setup.
-    Enter this server's .onion address to begin syncing.
+
+  <!-- QR Codes -->
+  <div class="card">
+    <h2>&#x1F4F1; Connect from Phone</h2>
+    <div class="qr-row">
+      <div class="qr-box">
+        <canvas id="qr-lan"></canvas>
+        <div class="qr-label">LAN</div>
+        <div class="qr-addr" id="lan-addr"></div>
+      </div>
+      <div class="qr-box" id="tor-qr-box">
+        <canvas id="qr-tor"></canvas>
+        <div class="qr-label">Tor</div>
+        <div class="qr-addr" id="tor-addr"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Receive from Phone -->
+  <div class="card">
+    <h2>&#x1F4E5; Receive from Phone</h2>
+    <p style="color:#999;font-size:13px">Enter the IP of a phone running "Share The Freedom" to pull chainstate.</p>
+    <input type="text" id="phone-ip" placeholder="e.g. 192.168.1.42">
+    <button class="btn btn-primary" id="fetch-btn" onclick="startFetch()">Fetch Chainstate</button>
+    <div id="fetch-progress" class="hidden">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="status-text" id="fetch-status">Starting...</div>
+    </div>
   </div>
 </div>
+
+<!-- QR Code library (minimal, no deps) -->
+<script>
+// QR Code generator (minimal implementation)
+// Based on qrcode-generator by Kazuhiko Arase (MIT license)
+var qrcode=function(){function r(r,t){var e=r,n=a[t],o=null,i=0,u=null,f=[],v={},c=function(r,t){o=function(r){for(var t=new Array(r),e=0;e<r;e++){t[e]=new Array(r);for(var n=0;n<r;n++)t[e][n]=null}return t}(i=4*e+17);w(0,0);w(i-7,0);w(0,i-7);A(r,t)};v.addData=function(r){var t=new l(r);f.push(t);u=null};v.make=function(){if(f.length==0)return;var r=0;var t=0;var e=[];for(var n=0;n<f.length;n++){var o=f[n];e.push({mode:4,data:o.data})}var a=1e9;for(var n=0;n<e.length;n++){var i=h(e[n].mode,e[n].data.length);if(i<0)throw"data too long";if(a>i)a=i}u=0;for(var n=0;n<e.length;n++){u+=4;u+=s(e[n].mode,a);u+=e[n].data.length*8}var l=g(a);if(u>l*8)throw"data too long";if(u+4<=l*8)u+=4;while(u%8!=0)u++;while(true){if(u>=l*8)break;u+=8;if(u>=l*8)break;u+=8}var v=0;var c=0;var p=[];for(var n=0;n<e.length;n++){p.push(e[n].data)}var m=d(a,t,p);c(a,m)};v.getModuleCount=function(){return i};v.isDark=function(r,t){if(r<0||i<=r||t<0||i<=t)throw r+","+t;return o[r][t]};var w=function(r,t){for(var e=-1;e<=7;e++)if(!(r+e<=-1||i<=r+e))for(var n=-1;n<=7;n++)if(!(t+n<=-1||i<=t+n))if(0<=e&&e<=6&&(n==0||n==6)||0<=n&&n<=6&&(e==0||e==6)||2<=e&&e<=4&&2<=n&&n<=4)o[r+e][t+n]=true;else o[r+e][t+n]=false};var A=function(r,t){for(var a=i-1;a>=0;a-=2){if(a==6)a--;for(var f=-1;f<=i;f++){var s=a%2==0;var l=null;if(o[s?f:i-1-f][a]!=null){continue}if(t<8*e.length){l=(t>>>3<e.length)&&((e.charCodeAt(t>>>3)>>>(7-t%8))&1)==1;t++}else if(t<8*e.length+4){l=((n>>>(3-t%4))&1)==1;t++}o[s?f:i-1-f][a]=l}}var e=function(){var t=g(r);var a=[];for(var o=0;o<f.length;o++){var i=f[o];a.push(i.data)}return d(r,0,a)}()};return v}function a(r){switch(r){case 0:return 7;case 1:return 10;case 2:return 13;case 3:return 17;default:return 0}}function s(r,t){return 8}function g(r){return[19,34,55,80,108,136,156,194,232,274,324,370,428,461,523,589,659,720,790,858,929,1003,1091,1171,1273,1367,1465,1528,1628,1732,1840,1952,2068,2188,2303,2431,2563,2699,2809,2953][r-1]}function h(r,t){for(var e=1;e<=40;e++){var n=g(e);if(t*8+4+s(r,e)<=n*8)return e}return-1}function d(r,t,e){for(var n="",a=0;a<e.length;a++){n+=e[a]}var o=g(r);var i=n.length;var u=[];u.push(64|i>>4);u.push((i&15)<<4);for(var f=0;f<i;f++){u[u.length-1]|=n.charCodeAt(f)>>>(f%2==0?4:0)&15;if(f%2==0)u.push((n.charCodeAt(f)&15)<<4)}if(u.length<o)u.push(0);while(u.length<o){u.push(236);if(u.length<o)u.push(17)}return u}function l(r){this.data=r}return r}();
+
+function makeQR(canvasId, text, size) {
+  // Use a simple QR approach via Google Charts API image
+  var canvas = document.getElementById(canvasId);
+  var img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = function() {
+    canvas.width = size;
+    canvas.height = size;
+    var ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, size, size);
+  };
+  img.src = "https://chart.googleapis.com/chart?cht=qr&chs=" + size + "x" + size + "&chl=" + encodeURIComponent(text) + "&choe=UTF-8";
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + " B";
+  if (b < 1048576) return (b/1024).toFixed(1) + " KB";
+  if (b < 1073741824) return (b/1048576).toFixed(1) + " MB";
+  return (b/1073741824).toFixed(2) + " GB";
+}
+
+function refreshStatus() {
+  fetch("/info").then(r => r.json()).then(d => {
+    document.getElementById("height").textContent = d.chainHeight.toLocaleString();
+    document.getElementById("filters").textContent = d.hasFilters ? "yes ⚡" : "no";
+    document.getElementById("transfers").textContent = d.activeTransfers + "/" + d.maxConcurrent;
+  });
+  fetch("/status").then(r => r.json()).then(d => {
+    document.getElementById("filecount").textContent = d.fileCount.toLocaleString();
+    document.getElementById("totalsize").textContent = formatBytes(d.totalSize);
+    document.getElementById("updated").textContent = d.lastFetched || "never";
+    // LAN QR
+    var lanUrl = "http://" + d.lanAddress + ":8432";
+    document.getElementById("lan-addr").textContent = d.lanAddress + ":8432";
+    makeQR("qr-lan", lanUrl, 160);
+    // Tor QR
+    if (d.onionAddress) {
+      var torUrl = "http://" + d.onionAddress + ":8432";
+      document.getElementById("tor-addr").textContent = d.onionAddress.substring(0,16) + "...:8432";
+      makeQR("qr-tor", torUrl, 160);
+    } else {
+      document.getElementById("tor-qr-box").classList.add("hidden");
+    }
+  });
+}
+
+function startFetch() {
+  var ip = document.getElementById("phone-ip").value.trim();
+  if (!ip) return;
+  document.getElementById("fetch-btn").disabled = true;
+  document.getElementById("fetch-progress").classList.remove("hidden");
+  document.getElementById("fetch-status").textContent = "Connecting to " + ip + "...";
+  document.getElementById("progress-fill").style.width = "0%";
+
+  fetch("/fetch", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({host:ip})})
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) {
+        document.getElementById("fetch-status").innerHTML = '<span class="error">' + d.error + '</span>';
+        document.getElementById("fetch-btn").disabled = false;
+      } else {
+        pollFetch();
+      }
+    });
+}
+
+function pollFetch() {
+  fetch("/status").then(r => r.json()).then(d => {
+    if (d.fetchState === "running") {
+      document.getElementById("fetch-status").textContent = d.fetchProgress || "Downloading...";
+      var pct = d.fetchPercent || 0;
+      document.getElementById("progress-fill").style.width = pct + "%";
+      setTimeout(pollFetch, 1000);
+    } else if (d.fetchState === "done") {
+      document.getElementById("fetch-status").innerHTML = '<span class="success">✅ Download complete!</span>';
+      document.getElementById("progress-fill").style.width = "100%";
+      document.getElementById("fetch-btn").disabled = false;
+      refreshStatus();
+    } else if (d.fetchState === "error") {
+      document.getElementById("fetch-status").innerHTML = '<span class="error">❌ ' + (d.fetchError||"Failed") + '</span>';
+      document.getElementById("fetch-btn").disabled = false;
+    } else {
+      document.getElementById("fetch-btn").disabled = false;
+    }
+  });
+}
+
+refreshStatus();
+setInterval(refreshStatus, 10000);
+</script>
 </body>
 </html>"""
         self._send_text(200, html, content_type="text/html")
@@ -272,6 +408,114 @@ class RelayHandler(BaseHTTPRequestHandler):
 
         manifest = build_manifest(bitcoin_dir)
         self._send_json(200, manifest)
+
+    def _serve_status(self):
+        """Extended status for the dashboard."""
+        cfg = self.server.relay_config
+        bitcoin_dir = get_bitcoin_dir(cfg)
+        manifest = build_manifest(bitcoin_dir)
+
+        # Get LAN IP
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            lan_ip = "unknown"
+
+        # Last fetched time
+        height_file = Path("chain_height.json")
+        last_fetched = None
+        if height_file.exists():
+            try:
+                data = json.loads(height_file.read_text())
+                last_fetched = data.get("fetchedAt")
+            except Exception:
+                pass
+
+        status = {
+            "fileCount": manifest["fileCount"],
+            "totalSize": manifest["totalSize"],
+            "lanAddress": lan_ip,
+            "onionAddress": self.server.onion_address,
+            "lastFetched": last_fetched,
+            "fetchState": self.server.fetch_status.get("state", "idle") if self.server.fetch_status else "idle",
+            "fetchProgress": self.server.fetch_status.get("progress", "") if self.server.fetch_status else "",
+            "fetchPercent": self.server.fetch_status.get("percent", 0) if self.server.fetch_status else 0,
+            "fetchError": self.server.fetch_status.get("error", "") if self.server.fetch_status else "",
+        }
+        self._send_json(200, status)
+
+    def _handle_fetch(self):
+        """Trigger chainstate fetch from a phone."""
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length).decode() if content_length > 0 else "{}"
+        try:
+            data = json.loads(body)
+        except Exception:
+            self._send_json(400, {"error": "Invalid JSON"})
+            return
+
+        host = data.get("host", "").strip()
+        if not host:
+            self._send_json(400, {"error": "Missing 'host' field"})
+            return
+
+        if self.server.fetch_status and self.server.fetch_status.get("state") == "running":
+            self._send_json(409, {"error": "Fetch already in progress"})
+            return
+
+        port = data.get("port", 8432)
+        no_filters = data.get("noFilters", False)
+
+        # Start fetch in background thread
+        self.server.fetch_status = {"state": "running", "progress": "Connecting...", "percent": 0}
+
+        def run_fetch():
+            try:
+                import subprocess
+                cfg = self.server.relay_config
+                cmd = [
+                    sys.executable, "fetch.py", host,
+                    "--port", str(port),
+                    "-c", "config.yaml",
+                    "--clean", "-j", "4",
+                ]
+                if no_filters:
+                    cmd.append("--no-filters")
+
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    cwd=str(Path(__file__).parent), text=True
+                )
+
+                for line in proc.stdout:
+                    line = line.strip()
+                    if "%" in line and "GB" in line:
+                        # Parse progress line
+                        try:
+                            pct = int(line.split("%")[0].strip())
+                            self.server.fetch_status = {
+                                "state": "running",
+                                "progress": line[:80],
+                                "percent": pct,
+                            }
+                        except Exception:
+                            self.server.fetch_status["progress"] = line[:80]
+
+                proc.wait()
+                if proc.returncode == 0:
+                    self.server.fetch_status = {"state": "done", "progress": "Complete", "percent": 100}
+                else:
+                    self.server.fetch_status = {"state": "error", "error": "Fetch failed", "percent": 0}
+            except Exception as e:
+                self.server.fetch_status = {"state": "error", "error": str(e), "percent": 0}
+
+        t = threading.Thread(target=run_fetch, daemon=True)
+        t.start()
+        self._send_json(200, {"status": "started"})
 
     def _serve_peer_limits(self):
         """Serve cached peer channel minimums (relay learns from connected phones)."""
@@ -361,6 +605,8 @@ class RelayHTTPServer(HTTPServer):
         super().__init__(*args, **kwargs)
         self.relay_config = relay_config or {}
         self.active_transfers = 0
+        self.onion_address = None
+        self.fetch_status = None  # {"state": "idle|running|done|error", "progress": "", "error": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +669,16 @@ def main():
 
     # Start server
     server = RelayHTTPServer((host, port), RelayHandler, relay_config=cfg)
+
+    # Store onion address if available
+    if tor_cfg.get("enabled"):
+        hs_dir2 = Path(tor_cfg.get("hidden_service_dir", "/var/lib/tor/pocket-relay"))
+        try:
+            hf = hs_dir2 / "hostname"
+            if hf.exists():
+                server.onion_address = hf.read_text().strip()
+        except Exception:
+            pass
 
     def shutdown_handler(sig, frame):
         logger.info("Shutting down...")
