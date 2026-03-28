@@ -283,24 +283,27 @@ class RelayHandler(BaseHTTPRequestHandler):
   </div>
 </div>
 
-<!-- QR Code library (minimal, no deps) -->
+<!-- QR Code: use qrcode-generator CDN (MIT, Kazuhiko Arase) -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script>
-// QR Code generator (minimal implementation)
-// Based on qrcode-generator by Kazuhiko Arase (MIT license)
-var qrcode=function(){function r(r,t){var e=r,n=a[t],o=null,i=0,u=null,f=[],v={},c=function(r,t){o=function(r){for(var t=new Array(r),e=0;e<r;e++){t[e]=new Array(r);for(var n=0;n<r;n++)t[e][n]=null}return t}(i=4*e+17);w(0,0);w(i-7,0);w(0,i-7);A(r,t)};v.addData=function(r){var t=new l(r);f.push(t);u=null};v.make=function(){if(f.length==0)return;var r=0;var t=0;var e=[];for(var n=0;n<f.length;n++){var o=f[n];e.push({mode:4,data:o.data})}var a=1e9;for(var n=0;n<e.length;n++){var i=h(e[n].mode,e[n].data.length);if(i<0)throw"data too long";if(a>i)a=i}u=0;for(var n=0;n<e.length;n++){u+=4;u+=s(e[n].mode,a);u+=e[n].data.length*8}var l=g(a);if(u>l*8)throw"data too long";if(u+4<=l*8)u+=4;while(u%8!=0)u++;while(true){if(u>=l*8)break;u+=8;if(u>=l*8)break;u+=8}var v=0;var c=0;var p=[];for(var n=0;n<e.length;n++){p.push(e[n].data)}var m=d(a,t,p);c(a,m)};v.getModuleCount=function(){return i};v.isDark=function(r,t){if(r<0||i<=r||t<0||i<=t)throw r+","+t;return o[r][t]};var w=function(r,t){for(var e=-1;e<=7;e++)if(!(r+e<=-1||i<=r+e))for(var n=-1;n<=7;n++)if(!(t+n<=-1||i<=t+n))if(0<=e&&e<=6&&(n==0||n==6)||0<=n&&n<=6&&(e==0||e==6)||2<=e&&e<=4&&2<=n&&n<=4)o[r+e][t+n]=true;else o[r+e][t+n]=false};var A=function(r,t){for(var a=i-1;a>=0;a-=2){if(a==6)a--;for(var f=-1;f<=i;f++){var s=a%2==0;var l=null;if(o[s?f:i-1-f][a]!=null){continue}if(t<8*e.length){l=(t>>>3<e.length)&&((e.charCodeAt(t>>>3)>>>(7-t%8))&1)==1;t++}else if(t<8*e.length+4){l=((n>>>(3-t%4))&1)==1;t++}o[s?f:i-1-f][a]=l}}var e=function(){var t=g(r);var a=[];for(var o=0;o<f.length;o++){var i=f[o];a.push(i.data)}return d(r,0,a)}()};return v}function a(r){switch(r){case 0:return 7;case 1:return 10;case 2:return 13;case 3:return 17;default:return 0}}function s(r,t){return 8}function g(r){return[19,34,55,80,108,136,156,194,232,274,324,370,428,461,523,589,659,720,790,858,929,1003,1091,1171,1273,1367,1465,1528,1628,1732,1840,1952,2068,2188,2303,2431,2563,2699,2809,2953][r-1]}function h(r,t){for(var e=1;e<=40;e++){var n=g(e);if(t*8+4+s(r,e)<=n*8)return e}return-1}function d(r,t,e){for(var n="",a=0;a<e.length;a++){n+=e[a]}var o=g(r);var i=n.length;var u=[];u.push(64|i>>4);u.push((i&15)<<4);for(var f=0;f<i;f++){u[u.length-1]|=n.charCodeAt(f)>>>(f%2==0?4:0)&15;if(f%2==0)u.push((n.charCodeAt(f)&15)<<4)}if(u.length<o)u.push(0);while(u.length<o){u.push(236);if(u.length<o)u.push(17)}return u}function l(r){this.data=r}return r}();
-
 function makeQR(canvasId, text, size) {
-  // Use a simple QR approach via Google Charts API image
+  var qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
   var canvas = document.getElementById(canvasId);
-  var img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = function() {
-    canvas.width = size;
-    canvas.height = size;
-    var ctx = canvas.getContext("2d");
-    ctx.drawImage(img, 0, 0, size, size);
-  };
-  img.src = "https://chart.googleapis.com/chart?cht=qr&chs=" + size + "x" + size + "&chl=" + encodeURIComponent(text) + "&choe=UTF-8";
+  var count = qr.getModuleCount();
+  var cellSize = Math.floor(size / count);
+  canvas.width = cellSize * count;
+  canvas.height = cellSize * count;
+  var ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  for (var r = 0; r < count; r++) {
+    for (var c = 0; c < count; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
+    }
+  }
 }
 
 function formatBytes(b) {
