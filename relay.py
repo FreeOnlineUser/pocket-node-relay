@@ -220,7 +220,7 @@ class RelayHandler(BaseHTTPRequestHandler):
   .qr-box{background:#fff;border-radius:12px;padding:16px;text-align:center}
   .qr-box canvas{display:block;margin:0 auto 8px}
   .qr-label{font-size:12px;color:#333;font-weight:600}
-  .qr-addr{font-size:10px;color:#666;word-break:break-all;max-width:200px;margin-top:4px}
+  .qr-addr{font-size:11px;color:#666;word-break:break-all;max-width:240px;margin-top:4px;cursor:pointer;user-select:all}
   .btn{display:block;width:100%;padding:14px;border-radius:12px;font-size:16px;font-weight:600;border:none;cursor:pointer;margin-top:12px}
   .btn-primary{background:#FF9800;color:#000}
   .btn-primary:hover{background:#FFA726}
@@ -330,7 +330,7 @@ function refreshStatus() {
     // Tor QR
     if (d.onionAddress) {
       var torUrl = "http://" + d.onionAddress + ":8432";
-      document.getElementById("tor-addr").textContent = d.onionAddress.substring(0,16) + "...:8432";
+      document.getElementById("tor-addr").textContent = d.onionAddress + ":8432";
       makeQR("qr-tor", torUrl, 160);
     } else {
       document.getElementById("tor-qr-box").classList.add("hidden");
