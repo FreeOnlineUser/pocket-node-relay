@@ -271,9 +271,9 @@ class RelayHandler(BaseHTTPRequestHandler):
     </div>
   </div>
 
-  <!-- Receive from Phone -->
+  <!-- Receive update from Pocket Node -->
   <div class="card">
-    <h2>&#x1F4E5; Receive from Phone</h2>
+    <h2>&#x1F4E5; Receive Update from Pocket Node</h2>
     <p style="color:#999;font-size:13px">Enter the IP of a phone running "Share The Freedom" to pull chainstate.</p>
     <input type="text" id="phone-ip" placeholder="e.g. 192.168.1.42">
     <button class="btn btn-primary" id="fetch-btn" onclick="startFetch()">Fetch Chainstate</button>
