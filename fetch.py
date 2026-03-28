@@ -7,21 +7,106 @@ Downloads manifest, then all files into the local data directory
 so the relay can serve them to other phones.
 
 Usage:
-    python3 fetch.py <phone-ip> [--port 8432] [--no-filters]
+    python3 fetch.py <phone-ip> [--port 8432] [--no-filters] [--resume] [--parallel 4]
     python3 fetch.py 10.0.1.42
-    python3 fetch.py 10.0.1.42 --no-filters
+    python3 fetch.py 10.0.1.42 --resume --parallel 8
 """
 
 import argparse
 import json
 import os
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
+
+# ---------------------------------------------------------------------------
+# Shared progress state for parallel downloads
+# ---------------------------------------------------------------------------
+
+class ProgressTracker:
+    def __init__(self, total_files: int, total_bytes: int):
+        self.total_files = total_files
+        self.total_bytes = total_bytes
+        self.completed_files = 0
+        self.completed_bytes = 0
+        self.skipped_files = 0
+        self.skipped_bytes = 0
+        self.failed = []
+        self.active = {}  # thread_id -> (path, downloaded, total)
+        self.lock = threading.Lock()
+        self.start_time = time.time()
+        self._last_print = 0
+
+    def skip(self, path: str, size: int):
+        with self.lock:
+            self.skipped_files += 1
+            self.skipped_bytes += size
+
+    def start_file(self, thread_id: int, path: str, size: int):
+        with self.lock:
+            self.active[thread_id] = (path, 0, size)
+
+    def update_file(self, thread_id: int, downloaded: int):
+        with self.lock:
+            if thread_id in self.active:
+                path, _, total = self.active[thread_id]
+                self.active[thread_id] = (path, downloaded, total)
+        self._maybe_print()
+
+    def finish_file(self, thread_id: int, size: int):
+        with self.lock:
+            self.completed_files += 1
+            self.completed_bytes += size
+            self.active.pop(thread_id, None)
+        self._maybe_print()
+
+    def fail_file(self, thread_id: int, path: str):
+        with self.lock:
+            self.failed.append(path)
+            self.active.pop(thread_id, None)
+
+    def _maybe_print(self):
+        now = time.time()
+        if now - self._last_print < 0.5:
+            return
+        self._last_print = now
+
+        with self.lock:
+            done = self.completed_bytes + self.skipped_bytes
+            # Add partial progress from active downloads
+            for _, (_, downloaded, _) in self.active.items():
+                done += downloaded
+
+            elapsed = now - self.start_time
+            speed = done / elapsed if elapsed > 0 else 0
+            pct = (done * 100 // self.total_bytes) if self.total_bytes > 0 else 0
+            n_done = self.completed_files + self.skipped_files
+            n_active = len(self.active)
+
+            # Show active file names (shortened)
+            active_names = []
+            for _, (path, dl, total) in self.active.items():
+                name = path.split("/")[-1]
+                if total > 0:
+                    fpct = dl * 100 // total
+                    active_names.append(f"{name} {fpct}%")
+                else:
+                    active_names.append(name)
+
+        active_str = " | ".join(active_names[:4])
+        if len(active_names) > 4:
+            active_str += f" +{len(active_names) - 4}"
+
+        print(f"\r  {pct:3d}%  {format_bytes(done)}/{format_bytes(self.total_bytes)}  "
+              f"{format_speed(speed)}  "
+              f"[{n_done}/{self.total_files}]  "
+              f"{active_str}        ", end="", flush=True)
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -51,7 +136,6 @@ def format_speed(bps: float) -> str:
 
 
 def get_info(host: str, port: int) -> dict:
-    """Fetch /info from the phone's ShareServer."""
     url = f"http://{host}:{port}/info"
     try:
         req = urllib.request.urlopen(url, timeout=5)
@@ -62,7 +146,6 @@ def get_info(host: str, port: int) -> dict:
 
 
 def get_manifest(host: str, port: int) -> dict:
-    """Fetch /manifest from the phone's ShareServer."""
     url = f"http://{host}:{port}/manifest"
     try:
         req = urllib.request.urlopen(url, timeout=30)
@@ -79,14 +162,12 @@ def get_manifest(host: str, port: int) -> dict:
 
 
 def fetch_peer_limits(host: str, port: int, data_dir: Path):
-    """Fetch and save peer channel limits."""
     url = f"http://{host}:{port}/peer-limits"
     try:
         req = urllib.request.urlopen(url, timeout=5)
         limits = json.loads(req.read())
         if limits:
             limits_file = Path("peer_limits.json")
-            # Merge with existing
             existing = {}
             if limits_file.exists():
                 try:
@@ -102,20 +183,21 @@ def fetch_peer_limits(host: str, port: int, data_dir: Path):
             if merged:
                 print(f"  Merged {merged} peer channel limits")
     except Exception:
-        pass  # Non-critical
+        pass
 
 
-def download_file(host: str, port: int, file_path: str, dest: Path, file_size: int) -> bool:
-    """Download a single file from the ShareServer."""
+def download_one(host: str, port: int, file_path: str, dest: Path, 
+                 file_size: int, tracker: ProgressTracker) -> bool:
+    """Download a single file. Called from thread pool."""
+    thread_id = threading.get_ident()
     url = f"http://{host}:{port}/file/{file_path}"
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    tracker.start_file(thread_id, file_path, file_size)
     try:
         req = urllib.request.urlopen(url, timeout=60)
         buf_size = 65536
         downloaded = 0
-        start_time = time.time()
-        last_report = start_time
 
         with open(dest, "wb") as f:
             while True:
@@ -124,20 +206,19 @@ def download_file(host: str, port: int, file_path: str, dest: Path, file_size: i
                     break
                 f.write(chunk)
                 downloaded += len(chunk)
+                if downloaded % (256 * 1024) < buf_size:
+                    tracker.update_file(thread_id, downloaded)
 
-                # Progress update every 0.5s
-                now = time.time()
-                if now - last_report >= 0.5 or downloaded == file_size:
-                    elapsed = now - start_time
-                    speed = downloaded / elapsed if elapsed > 0 else 0
-                    pct = (downloaded * 100 // file_size) if file_size > 0 else 100
-                    print(f"\r    {pct:3d}%  {format_bytes(downloaded)} / {format_bytes(file_size)}  {format_speed(speed)}   ", end="", flush=True)
-                    last_report = now
-
-        print()  # newline after progress
+        tracker.finish_file(thread_id, file_size)
         return True
-    except Exception as e:
-        print(f"\n    Error: {e}")
+    except Exception:
+        tracker.fail_file(thread_id, file_path)
+        # Remove partial file
+        try:
+            if dest.exists():
+                dest.unlink()
+        except Exception:
+            pass
         return False
 
 
@@ -149,6 +230,7 @@ def main():
     parser.add_argument("-c", "--config", default="config.yaml", help="Config file path")
     parser.add_argument("--clean", action="store_true", help="Delete existing data before downloading")
     parser.add_argument("--resume", action="store_true", help="Skip files that already exist with correct size")
+    parser.add_argument("--parallel", "-j", type=int, default=4, help="Parallel downloads (default: 4)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -177,76 +259,85 @@ def main():
         total_size = sum(f["size"] for f in files)
 
     print(f"  {len(files)} files, {format_bytes(total_size)} total")
-    print()
 
     # Clean existing data if requested
     if args.clean and data_dir.exists():
         import shutil
-        for subdir in ("chainstate", "blocks"):
+        for subdir in ("chainstate", "blocks", "indexes"):
             p = data_dir / subdir
             if p.exists():
                 shutil.rmtree(p)
                 print(f"  Cleaned {p}")
-        idx_dir = data_dir / "indexes"
-        if idx_dir.exists():
-            shutil.rmtree(idx_dir)
-            print(f"  Cleaned {idx_dir}")
-        print()
 
     # Ensure data directory exists
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Fetch peer limits (non-blocking, non-critical)
+    # Fetch peer limits
     fetch_peer_limits(args.host, args.port, data_dir)
 
-    # Download all files
-    print(f"Downloading to {data_dir}...")
-    print()
-
-    overall_start = time.time()
-    bytes_done = 0
-    skipped = 0
-    failed = []
-
-    for i, file_info in enumerate(files):
+    # Build download list, applying resume logic
+    download_list = []
+    skip_bytes = 0
+    skip_count = 0
+    for file_info in files:
         file_path = file_info["path"]
         file_size = file_info["size"]
         dest = data_dir / file_path
 
-        short_name = file_path.split("/")[-1]
-
-        # Skip existing files in resume mode
         if args.resume and dest.exists() and dest.stat().st_size == file_size:
-            bytes_done += file_size
-            skipped += 1
+            skip_bytes += file_size
+            skip_count += 1
             continue
+        download_list.append((file_path, file_size, dest))
 
-        print(f"  [{i + 1}/{len(files)}] {file_path} ({format_bytes(file_size)})")
+    if skip_count:
+        print(f"  Skipping {skip_count} existing files ({format_bytes(skip_bytes)})")
 
-        if download_file(args.host, args.port, file_path, dest, file_size):
-            bytes_done += file_size
-        else:
-            failed.append(file_path)
+    remaining = sum(s for _, s, _ in download_list)
+    print(f"  Downloading {len(download_list)} files ({format_bytes(remaining)})")
+    print(f"  Parallel: {args.parallel} connections")
+    print()
+
+    if not download_list:
+        print("✅ Nothing to download — all files present.")
+        return
+
+    # Parallel download
+    tracker = ProgressTracker(len(files), total_size)
+    tracker.skipped_files = skip_count
+    tracker.skipped_bytes = skip_bytes
+
+    with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+        futures = {}
+        for file_path, file_size, dest in download_list:
+            fut = pool.submit(download_one, args.host, args.port, file_path, dest, file_size, tracker)
+            futures[fut] = file_path
+
+        for fut in as_completed(futures):
+            pass  # Results tracked by ProgressTracker
+
+    print()  # newline after progress line
 
     # Summary
-    elapsed = time.time() - overall_start
-    avg_speed = bytes_done / elapsed if elapsed > 0 else 0
+    elapsed = time.time() - tracker.start_time
+    total_done = tracker.completed_bytes + tracker.skipped_bytes
+    avg_speed = tracker.completed_bytes / elapsed if elapsed > 0 else 0
 
     print()
     print("=" * 50)
-    if skipped:
-        print(f"  Skipped:  {skipped} existing files")
-    if not failed:
+    if tracker.skipped_files:
+        print(f"  Skipped:  {tracker.skipped_files} existing files ({format_bytes(tracker.skipped_bytes)})")
+    if not tracker.failed:
         print(f"✅ Download complete!")
     else:
-        print(f"⚠️  Download finished with {len(failed)} errors:")
-        for f in failed:
+        print(f"⚠️  {len(tracker.failed)} files failed (re-run with --resume to retry)")
+        for f in tracker.failed[:20]:
             print(f"    - {f}")
-    print(f"  Files:    {len(files) - len(failed)}/{len(files)}")
-    print(f"  Size:     {format_bytes(bytes_done)}")
-    print(f"  Time:     {elapsed:.1f}s")
-    print(f"  Speed:    {format_speed(avg_speed)}")
-    print(f"  Stored:   {data_dir}")
+        if len(tracker.failed) > 20:
+            print(f"    ... and {len(tracker.failed) - 20} more")
+    print(f"  Downloaded: {format_bytes(tracker.completed_bytes)} in {elapsed:.1f}s ({format_speed(avg_speed)})")
+    print(f"  Total:      {format_bytes(total_done)} / {format_bytes(total_size)}")
+    print(f"  Stored:     {data_dir}")
     print()
     print("The relay is now ready to serve this chainstate to other phones.")
     print(f"  .onion address: check /var/lib/tor/pocket-relay/hostname")
