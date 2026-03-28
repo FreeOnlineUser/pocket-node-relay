@@ -1,0 +1,26 @@
+# Pocket Node Relay Configuration
+
+# Bitcoin Core data directory
+bitcoin_datadir: /home/relay/.bitcoin
+
+# bitcoind binary path (leave empty to use PATH)
+bitcoind_path: ""
+
+# Relay HTTP server
+server:
+  host: "127.0.0.1"   # Bind to localhost (Tor handles external access)
+  port: 8432           # Same port as phone ShareServer
+
+# Tor hidden service
+tor:
+  enabled: true
+  hidden_service_dir: /var/lib/tor/pocket-relay
+  hidden_service_port: 8432  # External port on .onion
+
+# Relay info (shown to connecting phones)
+relay:
+  version: "0.1.0"
+  max_concurrent: 4    # Server can handle more than a phone
+
+# Logging
+log_level: INFO
