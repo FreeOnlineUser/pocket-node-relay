@@ -186,6 +186,17 @@ def fetch_peer_limits(host: str, port: int, data_dir: Path):
         pass
 
 
+def start_session(host: str, port: int, total_files: int):
+    """Tell the sender how many files we'll download (for progress display)."""
+    url = f"http://{host}:{port}/start-session"
+    try:
+        data = json.dumps({"totalFiles": total_files}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass  # Non-critical, sender just won't show total progress
+
+
 def download_one(host: str, port: int, file_path: str, dest: Path, 
                  file_size: int, tracker: ProgressTracker) -> bool:
     """Download a single file. Called from thread pool."""
@@ -302,6 +313,9 @@ def main():
         print("✅ Nothing to download — all files present.")
         return
 
+    # Announce session to sender for progress tracking
+    start_session(args.host, args.port, len(download_list))
+
     # Parallel download
     tracker = ProgressTracker(len(files), total_size)
     tracker.skipped_files = skip_count
@@ -338,6 +352,16 @@ def main():
     print(f"  Downloaded: {format_bytes(tracker.completed_bytes)} in {elapsed:.1f}s ({format_speed(avg_speed)})")
     print(f"  Total:      {format_bytes(total_done)} / {format_bytes(total_size)}")
     print(f"  Stored:     {data_dir}")
+    print()
+    # Save chain height for the relay to serve
+    height_file = Path("chain_height.json")
+    height_file.write_text(json.dumps({
+        "chainHeight": info.get("chainHeight", 0),
+        "version": info.get("version", "unknown"),
+        "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }, indent=2))
+    print(f"  Height:   {info.get('chainHeight', 0):,} (saved to chain_height.json)")
+
     print()
     print("The relay is now ready to serve this chainstate to other phones.")
     print(f"  .onion address: check /var/lib/tor/pocket-relay/hostname")
