@@ -17,6 +17,7 @@ import signal
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from pathlib import Path
 
 import yaml
@@ -561,7 +562,8 @@ setInterval(refreshStatus, 10000);
             return
 
         file_size = file_path.stat().st_size
-        self.server.active_transfers += 1
+        with self.server._transfers_lock:
+            self.server.active_transfers += 1
         try:
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
@@ -579,7 +581,8 @@ setInterval(refreshStatus, 10000);
         except (BrokenPipeError, ConnectionResetError):
             logger.warning(f"Client disconnected during transfer: {normalized}")
         finally:
-            self.server.active_transfers -= 1
+            with self.server._transfers_lock:
+                self.server.active_transfers -= 1
 
     # -- Helpers --
 
@@ -602,14 +605,18 @@ setInterval(refreshStatus, 10000);
         self.wfile.write(body)
 
 
-class RelayHTTPServer(HTTPServer):
-    """Extended HTTPServer with relay state."""
+class RelayHTTPServer(ThreadingMixIn, HTTPServer):
+    """Threaded HTTP server with relay state."""
+    daemon_threads = True
+    allow_reuse_address = True
+
     def __init__(self, *args, relay_config=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.relay_config = relay_config or {}
         self.active_transfers = 0
+        self._transfers_lock = threading.Lock()
         self.onion_address = None
-        self.fetch_status = None  # {"state": "idle|running|done|error", "progress": "", "error": ""}
+        self.fetch_status = None
 
 
 # ---------------------------------------------------------------------------
