@@ -677,6 +677,11 @@ def main():
             hf = hs_dir2 / "hostname"
             if hf.exists():
                 server.onion_address = hf.read_text().strip()
+        except PermissionError:
+            # Fallback: read from cached copy
+            fallback = Path("onion_address.txt")
+            if fallback.exists():
+                server.onion_address = fallback.read_text().strip()
         except Exception:
             pass
 
