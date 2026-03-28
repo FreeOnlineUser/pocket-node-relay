@@ -176,9 +176,17 @@ def fetch_peer_limits(host: str, port: int, data_dir: Path):
                     pass
             merged = 0
             for key, value in limits.items():
-                if value > existing.get(key, -1):
-                    existing[key] = value
-                    merged += 1
+                old = existing.get(key)
+                if isinstance(value, bool):
+                    # Booleans: always take new value
+                    if old != value:
+                        existing[key] = value
+                        merged += 1
+                elif isinstance(value, (int, float)):
+                    # Numbers: keep the larger value
+                    if old is None or (isinstance(old, (int, float)) and value > old):
+                        existing[key] = value
+                        merged += 1
             limits_file.write_text(json.dumps(existing, indent=2))
             if merged:
                 print(f"  Merged {merged} peer channel limits")
