@@ -283,10 +283,9 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._send_text(403, "Invalid path")
             return
 
-        # Only allow files under known directories
+        # Only allow files under known directories, plus fee_estimates.dat
         if not any(normalized.startswith(p) for p in ALLOWED_PREFIXES):
-            # Also allow fee_estimates.dat at root
-            if normalized != "fee_estimates.dat":
+            if normalized not in ("fee_estimates.dat",):
                 self._send_text(403, f"Path not in allowed directories: {normalized}")
                 return
 
