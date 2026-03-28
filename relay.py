@@ -403,12 +403,15 @@ def main():
     if tor_cfg.get("enabled"):
         hs_dir = Path(tor_cfg.get("hidden_service_dir", "/var/lib/tor/pocket-relay"))
         hostname_file = hs_dir / "hostname"
-        if hostname_file.exists():
-            onion = hostname_file.read_text().strip()
-            logger.info(f"Tor hidden service: {onion}:{tor_cfg.get('hidden_service_port', 8432)}")
-        else:
-            logger.info("Tor hidden service configured but hostname not yet generated.")
-            logger.info("Start Tor and the hostname file will be created.")
+        try:
+            if hostname_file.exists():
+                onion = hostname_file.read_text().strip()
+                logger.info(f"Tor hidden service: {onion}:{tor_cfg.get('hidden_service_port', 8432)}")
+            else:
+                logger.info("Tor hidden service configured but hostname not yet generated.")
+                logger.info("Start Tor and the hostname file will be created.")
+        except PermissionError:
+            logger.info("Tor hidden service configured (cannot read hostname file — run as root or add user to debian-tor group)")
 
     # Start server
     server = RelayHTTPServer((host, port), RelayHandler, relay_config=cfg)
