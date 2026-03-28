@@ -329,8 +329,8 @@ function refreshStatus() {
     makeQR("qr-lan", lanUrl, 160);
     // Tor QR
     if (d.onionAddress) {
-      var torUrl = "http://" + d.onionAddress + ":8432";
-      document.getElementById("tor-addr").textContent = d.onionAddress + ":8432";
+      var torUrl = "http://" + d.onionAddress;
+      document.getElementById("tor-addr").textContent = d.onionAddress;
       makeQR("qr-tor", torUrl, 160);
     } else {
       document.getElementById("tor-qr-box").classList.add("hidden");
