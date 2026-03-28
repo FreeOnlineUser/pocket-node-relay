@@ -256,7 +256,7 @@ class RelayHandler(BaseHTTPRequestHandler):
 
   <!-- QR Codes -->
   <div class="card">
-    <h2>&#x1F4F1; Connect from Phone</h2>
+    <h2>&#x1F4F1; Share The Freedom</h2>
     <div class="qr-row">
       <div class="qr-box">
         <canvas id="qr-lan"></canvas>
