@@ -248,7 +248,7 @@ def main():
     parser.add_argument("--no-filters", action="store_true", help="Skip block filter download")
     parser.add_argument("-c", "--config", default="config.yaml", help="Config file path")
     parser.add_argument("--clean", action="store_true", help="Delete existing data before downloading")
-    parser.add_argument("--resume", action="store_true", help="Skip files that already exist with correct size")
+    parser.add_argument("--full", action="store_true", help="Re-download all files (default: incremental, skip unchanged)")
     parser.add_argument("--parallel", "-j", type=int, default=4, help="Parallel downloads (default: 4)")
     args = parser.parse_args()
 
@@ -294,7 +294,8 @@ def main():
     # Fetch peer limits
     fetch_peer_limits(args.host, args.port, data_dir)
 
-    # Build download list, applying resume logic
+    # Build download list — incremental by default (skip unchanged files)
+    manifest_paths = set()
     download_list = []
     skip_bytes = 0
     skip_count = 0
@@ -302,15 +303,31 @@ def main():
         file_path = file_info["path"]
         file_size = file_info["size"]
         dest = data_dir / file_path
+        manifest_paths.add(file_path)
 
-        if args.resume and dest.exists() and dest.stat().st_size == file_size:
+        if not args.full and dest.exists() and dest.stat().st_size == file_size:
             skip_bytes += file_size
             skip_count += 1
             continue
         download_list.append((file_path, file_size, dest))
 
     if skip_count:
-        print(f"  Skipping {skip_count} existing files ({format_bytes(skip_bytes)})")
+        print(f"  Skipping {skip_count} unchanged files ({format_bytes(skip_bytes)})")
+
+    # Remove stale files not in the new manifest (old compaction leftovers)
+    stale_count = 0
+    for subdir in ("chainstate", "blocks/index", "indexes/blockfilter/basic"):
+        local_dir = data_dir / subdir
+        if not local_dir.exists():
+            continue
+        for f in local_dir.rglob("*"):
+            if f.is_file():
+                rel = str(f.relative_to(data_dir))
+                if rel not in manifest_paths:
+                    f.unlink()
+                    stale_count += 1
+    if stale_count:
+        print(f"  Removed {stale_count} stale files")
 
     remaining = sum(s for _, s, _ in download_list)
     print(f"  Downloading {len(download_list)} files ({format_bytes(remaining)})")
