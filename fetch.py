@@ -148,6 +148,7 @@ def main():
     parser.add_argument("--no-filters", action="store_true", help="Skip block filter download")
     parser.add_argument("-c", "--config", default="config.yaml", help="Config file path")
     parser.add_argument("--clean", action="store_true", help="Delete existing data before downloading")
+    parser.add_argument("--resume", action="store_true", help="Skip files that already exist with correct size")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -204,6 +205,7 @@ def main():
 
     overall_start = time.time()
     bytes_done = 0
+    skipped = 0
     failed = []
 
     for i, file_info in enumerate(files):
@@ -212,6 +214,13 @@ def main():
         dest = data_dir / file_path
 
         short_name = file_path.split("/")[-1]
+
+        # Skip existing files in resume mode
+        if args.resume and dest.exists() and dest.stat().st_size == file_size:
+            bytes_done += file_size
+            skipped += 1
+            continue
+
         print(f"  [{i + 1}/{len(files)}] {file_path} ({format_bytes(file_size)})")
 
         if download_file(args.host, args.port, file_path, dest, file_size):
@@ -225,6 +234,8 @@ def main():
 
     print()
     print("=" * 50)
+    if skipped:
+        print(f"  Skipped:  {skipped} existing files")
     if not failed:
         print(f"✅ Download complete!")
     else:
