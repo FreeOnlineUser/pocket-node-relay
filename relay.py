@@ -45,22 +45,31 @@ def get_bitcoin_dir(cfg: dict) -> Path:
 
 
 def get_chain_height(bitcoin_dir: Path) -> int:
-    """Read chain height from debug.log (last UpdateTip line)."""
+    """Read chain height from saved fetch data or debug.log."""
+    # First try chain_height.json (saved by fetch.py)
+    height_file = Path("chain_height.json")
+    if height_file.exists():
+        try:
+            data = json.loads(height_file.read_text())
+            h = data.get("chainHeight", 0)
+            if h > 0:
+                return h
+        except Exception:
+            pass
+
+    # Fallback: read from debug.log if bitcoind is running
     debug_log = bitcoin_dir / "debug.log"
     if not debug_log.exists():
         return 0
     try:
-        # Read last 64KB of debug.log for efficiency
         size = debug_log.stat().st_size
         with open(debug_log, "r") as f:
             if size > 65536:
                 f.seek(size - 65536)
-                f.readline()  # skip partial line
+                f.readline()
             lines = f.readlines()
-        # Find last UpdateTip line
         for line in reversed(lines):
             if "UpdateTip:" in line:
-                # Format: UpdateTip: new best=... height=880000 ...
                 m = re.search(r"height=(\d+)", line)
                 if m:
                     return int(m.group(1))
