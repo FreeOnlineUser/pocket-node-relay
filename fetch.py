@@ -324,20 +324,7 @@ def main():
     if skip_count:
         print(f"  Skipping {skip_count} unchanged files ({format_bytes(skip_bytes)})")
 
-    # Remove stale files not in the new manifest (old compaction leftovers)
-    stale_count = 0
-    for subdir in ("chainstate", "blocks/index", "indexes/blockfilter/basic"):
-        local_dir = data_dir / subdir
-        if not local_dir.exists():
-            continue
-        for f in local_dir.rglob("*"):
-            if f.is_file():
-                rel = str(f.relative_to(data_dir))
-                if rel not in manifest_paths:
-                    f.unlink()
-                    stale_count += 1
-    if stale_count:
-        print(f"  Removed {stale_count} stale files")
+    # Note: stale file cleanup runs AFTER successful download (see below)
 
     remaining = sum(s for _, s, _ in download_list)
     print(f"  Downloading {len(download_list)} files ({format_bytes(remaining)})")
@@ -375,6 +362,28 @@ def main():
     # Tell sender we're done
     if not tracker.failed:
         complete_session(args.host, args.port)
+
+        # Clean up stale files only after successful download
+        # Only clean dirs that have files in the manifest (don't touch others)
+        manifest_dirs = set()
+        for p in manifest_paths:
+            parts = p.split("/")
+            if len(parts) > 1:
+                manifest_dirs.add(parts[0])  # e.g. "chainstate", "blocks", "indexes"
+        
+        stale_count = 0
+        for top_dir in manifest_dirs:
+            local_dir = data_dir / top_dir
+            if not local_dir.exists():
+                continue
+            for f in local_dir.rglob("*"):
+                if f.is_file():
+                    rel = str(f.relative_to(data_dir))
+                    if rel not in manifest_paths:
+                        f.unlink()
+                        stale_count += 1
+        if stale_count:
+            print(f"  Cleaned {stale_count} stale files")
 
     print()
     print("=" * 50)
