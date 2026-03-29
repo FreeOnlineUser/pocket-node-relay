@@ -205,6 +205,16 @@ def start_session(host: str, port: int, total_files: int):
         pass  # Non-critical, sender just won't show total progress
 
 
+def complete_session(host: str, port: int):
+    """Tell the sender we're done downloading (triggers '✅ Freedom shared!')."""
+    url = f"http://{host}:{port}/complete"
+    try:
+        req = urllib.request.Request(url, data=b'{}', headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
+
+
 def download_one(host: str, port: int, file_path: str, dest: Path, 
                  file_size: int, tracker: ProgressTracker) -> bool:
     """Download a single file. Called from thread pool."""
@@ -361,6 +371,10 @@ def main():
     elapsed = time.time() - tracker.start_time
     total_done = tracker.completed_bytes + tracker.skipped_bytes
     avg_speed = tracker.completed_bytes / elapsed if elapsed > 0 else 0
+
+    # Tell sender we're done
+    if not tracker.failed:
+        complete_session(args.host, args.port)
 
     print()
     print("=" * 50)
