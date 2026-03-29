@@ -210,13 +210,14 @@ def complete_session(host: str, port: int):
     url = f"http://{host}:{port}/complete"
     try:
         req = urllib.request.Request(url, data=b'{}', headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass
+        resp = urllib.request.urlopen(req, timeout=10)
+        print(f"  Session complete signal sent (HTTP {resp.status})")
+    except Exception as e:
+        print(f"  \u26a0\ufe0f  Failed to send completion signal: {e}")
 
 
 def download_one(host: str, port: int, file_path: str, dest: Path, 
-                 file_size: int, tracker: ProgressTracker) -> bool:
+                 file_size: int, tracker: ProgressTracker, file_mtime: int = None) -> bool:
     """Download a single file. Called from thread pool."""
     thread_id = threading.get_ident()
     url = f"http://{host}:{port}/file/{file_path}"
@@ -237,6 +238,11 @@ def download_one(host: str, port: int, file_path: str, dest: Path,
                 downloaded += len(chunk)
                 if downloaded % (256 * 1024) < buf_size:
                     tracker.update_file(thread_id, downloaded)
+
+        # Set local mtime to match source (for future incremental checks)
+        if file_mtime is not None:
+            mtime_sec = file_mtime / 1000.0
+            os.utime(dest, (mtime_sec, mtime_sec))
 
         tracker.finish_file(thread_id, file_size)
         return True
@@ -289,10 +295,18 @@ def main():
 
     print(f"  {len(files)} files, {format_bytes(total_size)} total")
 
-    # Clean existing data if requested
+    # Always wipe chainstate + blocks/index — these are consistency-critical
+    # and must come from the same snapshot
+    import shutil
+    for subdir in ("chainstate", "blocks/index"):
+        p = data_dir / subdir
+        if p.exists():
+            shutil.rmtree(p)
+            print(f"  Cleaned {p}")
+
+    # --clean also wipes blocks + indexes (the large stuff)
     if args.clean and data_dir.exists():
-        import shutil
-        for subdir in ("chainstate", "blocks", "indexes"):
+        for subdir in ("blocks", "indexes"):
             p = data_dir / subdir
             if p.exists():
                 shutil.rmtree(p)
@@ -315,18 +329,28 @@ def main():
         dest = data_dir / file_path
         manifest_paths.add(file_path)
 
-        if not args.full and dest.exists() and dest.stat().st_size == file_size:
+        # Always re-download chainstate (consistency-critical, never skip)
+        is_critical = file_path.startswith("chainstate/") or file_path.startswith("blocks/index/")
+        if not is_critical and not args.full and dest.exists() and dest.stat().st_size == file_size:
+            # Also check lastModified if the manifest provides it
+            file_mtime = file_info.get("lastModified")
+            if file_mtime is not None:
+                local_mtime = int(dest.stat().st_mtime * 1000)  # ms
+                if abs(local_mtime - file_mtime) > 1000:  # >1s difference
+                    download_list.append((file_path, file_size, dest, file_mtime))
+                    continue
             skip_bytes += file_size
             skip_count += 1
             continue
-        download_list.append((file_path, file_size, dest))
+        file_mtime = file_info.get("lastModified")
+        download_list.append((file_path, file_size, dest, file_mtime))
 
     if skip_count:
         print(f"  Skipping {skip_count} unchanged files ({format_bytes(skip_bytes)})")
 
     # Note: stale file cleanup runs AFTER successful download (see below)
 
-    remaining = sum(s for _, s, _ in download_list)
+    remaining = sum(s for _, s, _, _ in download_list)
     print(f"  Downloading {len(download_list)} files ({format_bytes(remaining)})")
     print(f"  Parallel: {args.parallel} connections")
     print()
@@ -345,8 +369,8 @@ def main():
 
     with ThreadPoolExecutor(max_workers=args.parallel) as pool:
         futures = {}
-        for file_path, file_size, dest in download_list:
-            fut = pool.submit(download_one, args.host, args.port, file_path, dest, file_size, tracker)
+        for file_path, file_size, dest, file_mtime in download_list:
+            fut = pool.submit(download_one, args.host, args.port, file_path, dest, file_size, tracker, file_mtime)
             futures[fut] = file_path
 
         for fut in as_completed(futures):
@@ -359,10 +383,10 @@ def main():
     total_done = tracker.completed_bytes + tracker.skipped_bytes
     avg_speed = tracker.completed_bytes / elapsed if elapsed > 0 else 0
 
-    # Tell sender we're done
-    if not tracker.failed:
-        complete_session(args.host, args.port)
+    # Tell sender we're done (always, even if some files failed)
+    complete_session(args.host, args.port)
 
+    if not tracker.failed:
         # Clean up stale files only after successful download
         # Only clean dirs that have files in the manifest (don't touch others)
         manifest_dirs = set()
