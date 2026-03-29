@@ -321,6 +321,18 @@ function refreshStatus() {
     document.getElementById("transfers").textContent = d.activeTransfers + "/" + d.maxConcurrent;
   });
   fetch("/status").then(r => r.json()).then(d => {
+    // Resume fetch progress UI on page load/refresh
+    if (d.fetchState === "running") {
+      document.getElementById("fetch-progress").classList.remove("hidden");
+      document.getElementById("fetch-btn").disabled = true;
+      document.getElementById("fetch-status").textContent = d.fetchProgress || "Downloading...";
+      document.getElementById("progress-fill").style.width = (d.fetchPercent || 0) + "%";
+      if (!window._polling) { window._polling = true; pollFetch(); }
+    } else if (d.fetchState === "done") {
+      document.getElementById("fetch-progress").classList.remove("hidden");
+      document.getElementById("fetch-status").innerHTML = '<span class="success">\u2705 Download complete!</span>';
+      document.getElementById("progress-fill").style.width = "100%";
+    }
     document.getElementById("filecount").textContent = d.fileCount.toLocaleString();
     document.getElementById("totalsize").textContent = formatBytes(d.totalSize);
     document.getElementById("updated").textContent = d.lastFetched || "never";
