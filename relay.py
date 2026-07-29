@@ -687,7 +687,15 @@ def main():
                 logger.info("Tor hidden service configured but hostname not yet generated.")
                 logger.info("Start Tor and the hostname file will be created.")
         except PermissionError:
-            logger.info("Tor hidden service configured (cannot read hostname file — run as root or add user to debian-tor group)")
+            # /var/lib/tor is 700/600 (debian-tor only), so being in the
+            # debian-tor group does NOT grant read — Tor hardens it on purpose.
+            # Use the cached copy if present; otherwise it's purely cosmetic,
+            # the hidden service runs via system Tor regardless.
+            fallback = Path("onion_address.txt")
+            if fallback.exists():
+                logger.info(f"Tor hidden service: {fallback.read_text().strip()}:{tor_cfg.get('hidden_service_port', 8432)}")
+            else:
+                logger.info("Tor hidden service active (onion not readable here; runs via system Tor regardless).")
 
     # Start server
     server = RelayHTTPServer((host, port), RelayHandler, relay_config=cfg)
@@ -709,7 +717,10 @@ def main():
 
     def shutdown_handler(sig, frame):
         logger.info("Shutting down...")
-        server.shutdown()
+        # Run shutdown() off the main thread. The main thread is blocked in
+        # serve_forever(), and shutdown() waits for serve_forever() to return,
+        # so calling it inline deadlocks — SIGINT/SIGTERM hung until SIGKILL.
+        threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
