@@ -729,11 +729,17 @@ def main():
             qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
             qr.add_data(qr_payload)
             qr.make(fit=True)
-            buf = io.StringIO()
-            qr.print_ascii(out=buf, invert=True)
+            def _ascii(inv):
+                b = io.StringIO()
+                qr.print_ascii(out=b, invert=inv)
+                return b.getvalue()
+            # Print both polarities: one scans on a dark terminal, the other
+            # on a light/white one. Whichever looks right for your background.
             print(
-                "\nScan in Pocket Node -> Nearby node to add this relay over Tor:\n\n"
-                + buf.getvalue()
+                "\nScan in Pocket Node -> Nearby node to add this relay over Tor.\n"
+                "One of the two below will scan, depending on terminal background:\n\n"
+                "[A] dark-background terminal:\n\n" + _ascii(True)
+                + "\n[B] light / white-background terminal:\n\n" + _ascii(False)
                 + "\nPayload: " + qr_payload + "\n",
                 flush=True,
             )
