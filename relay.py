@@ -715,6 +715,31 @@ def main():
         except Exception:
             pass
 
+    # Render a scannable QR of the connect payload so anyone watching the
+    # relay log/console can add it in Pocket Node (Nearby node) by scanning.
+    onion = getattr(server, "onion_address", None)
+    if onion:
+        qr_payload = json.dumps(
+            {"host": onion, "port": tor_cfg.get("hidden_service_port", 8432)},
+            separators=(",", ":"),
+        )
+        try:
+            import io
+            import qrcode
+            qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, border=2)
+            qr.add_data(qr_payload)
+            qr.make(fit=True)
+            buf = io.StringIO()
+            qr.print_ascii(out=buf, invert=True)
+            print(
+                "\nScan in Pocket Node -> Nearby node to add this relay over Tor:\n\n"
+                + buf.getvalue()
+                + "\nPayload: " + qr_payload + "\n",
+                flush=True,
+            )
+        except ImportError:
+            logger.info("Relay connect payload (pip install qrcode to render a QR): " + qr_payload)
+
     def shutdown_handler(sig, frame):
         logger.info("Shutting down...")
         # Run shutdown() off the main thread. The main thread is blocked in
